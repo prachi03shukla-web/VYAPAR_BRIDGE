@@ -1,0 +1,6 @@
+{
+  "name": "VYAPAR BRIDGE",
+  "description": "Vyapar Bridge - India's Universal B2B marketplace and social network connecting manufacturers directly with dealers and wholesalers across India for all industries including hardware, paints, electronics, and more.",
+  "requestFramePermissions": ["geolocation", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

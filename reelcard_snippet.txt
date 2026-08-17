@@ -1,0 +1,897 @@
+function ReelCard({ 
+  reel, 
+  currentUser, 
+  onClose,
+  userLocation,
+  isActive = true
+}: { 
+  reel: any; 
+  currentUser: any; 
+  onClose?: () => void;
+  userLocation?: {lat: number, lng: number} | null;
+  isActive?: boolean;
+}) {
+  const navigate = useNavigate();
+  const authorIdentifier = reel?.userId || reel?.user?.id || reel?.user?.name || reel?.name || '';
+  const [isLiked, setIsLiked] = useState(reel?.isLiked || false);
+  const [likesCount, setLikesCount] = useState(reel?.likesCount || 0);
+  const [isSaved, setIsSaved] = useState(reel?.isSaved || false);
+  const [savedCount, setSavedCount] = useState(reel?.savedCount || 0);
+
+  useEffect(() => {
+    setIsLiked(reel?.isLiked || false);
+    setLikesCount(reel?.likesCount || 0);
+    setIsSaved(reel?.isSaved || false);
+    setSavedCount(reel?.savedCount || 0);
+  }, [reel?.isLiked, reel?.likesCount, reel?.isSaved, reel?.savedCount]);
+  const [sharesCount, setSharesCount] = useState(reel?.sharesCount || 0);
+  const [comments, setComments] = useState<any[]>([]);
+  const [commentsCount, setCommentsCount] = useState(reel?.commentsCount || 0);
+  const [viewsCount, setViewsCount] = useState(reel?.viewsCount || 0);
+  const [commentText, setCommentText] = useState('');
+  const [isMuted, setIsMuted] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [showMore, setShowMore] = useState(false);
+  const [showCommentsDrawer, setShowCommentsDrawer] = useState(false);
+  const [showOptionsModal, setShowOptionsModal] = useState(false);
+  const [showStatsModal, setShowStatsModal] = useState(false);
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [reelRating, setReelRating] = useState<number>(reel?.averageRating || 4.8);
+  const [reelRatingsCount, setReelRatingsCount] = useState<number>(reel?.ratingsCount || 0);
+  const [isFollowing, setIsFollowing] = useState(() => isUserFollowed(authorIdentifier));
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [fitMode, setFitMode] = useState<'contain' | 'cover'>('contain');
+  const [showVolumeIndicator, setShowVolumeIndicator] = useState(false);
+  const [showHeart, setShowHeart] = useState(false);
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const audioRef = React.useRef<HTMLAudioElement>(null);
+
+  const isVideo = reel?.type === 'video' || (reel?.mediaUrl && reel.mediaUrl.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i)) || reel?.mediaUrl?.startsWith('data:video') || reel?.video;
+  const mediaSrc = reel?.mediaUrl || reel?.video || '';
+  const authorName = reel?.user?.name || reel?.name || 'User';
+  const authorAvatar = reel?.user?.avatarUrl || reel?.avatar;
+  const isAuthorVerified = reel?.user?.isVerified || reel?.isVerified;
+  const reelMusic = reel?.music || (reel?.musicTitle ? { title: reel.musicTitle, artist: reel.musicArtist, audioUrl: reel.musicUrl } : null);
+
+  useEffect(() => {
+    // Unique view tracking for reels (Real-time update)
+    if (reel?.id) {
+      const trackReelView = () => {
+        fetch(`/api/posts/${reel.id}/view`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUser?.id })
+        })
+        .then(res => (res.ok && res.headers.get('content-type')?.includes('application/json')) ? res.json() : null)
+        .then(data => {
+          if (data && data.viewsCount !== undefined) setViewsCount(data.viewsCount);
+          if (data && data.likesCount !== undefined) setLikesCount(data.likesCount);
+        })
+        .catch(err => console.warn('Failed to track reel view', err));
+      };
+
+      trackReelView();
+      // Poll for real-time counts every 15 seconds
+      const interval = setInterval(trackReelView, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [reel?.id]);
+
+  useEffect(() => {
+    // Attempt to play on mount (triggered by user interaction from opening the modal)
+    const playMedia = async () => {
+      try {
+        if (isPlaying && isActive) {
+          const vp = videoRef.current?.play();
+          if (vp !== undefined) vp.catch(()=>{});
+          const ap = audioRef.current?.play();
+          if (ap !== undefined) ap.catch(()=>{});
+        } else if (!isActive) {
+          videoRef.current?.pause();
+          audioRef.current?.pause();
+        }
+      } catch (err) {
+        console.log("Autoplay blocked, waiting for interaction");
+      }
+    };
+    playMedia();
+  }, [reel?.id, isPlaying, isActive]);
+
+  useEffect(() => {
+    if (showVolumeIndicator) {
+      const timer = setTimeout(() => setShowVolumeIndicator(false), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [showVolumeIndicator]);
+
+  const toggleMute = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setIsMuted(prev => !prev);
+    setShowVolumeIndicator(true);
+  };
+
+  const clickTimerRef = React.useRef<any>(null);
+  const lastClickTime = React.useRef(0);
+
+  const handleInteractionClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300;
+
+    if (now - lastClickTime.current < DOUBLE_TAP_DELAY) {
+      // Double tap detected
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      handleDoubleTap(e);
+      lastClickTime.current = 0; // Reset to prevent triple-tap double-trigger
+    } else {
+      // Potential single tap
+      lastClickTime.current = now;
+      clickTimerRef.current = setTimeout(() => {
+        togglePlay();
+        clickTimerRef.current = null;
+      }, DOUBLE_TAP_DELAY);
+    }
+  };
+
+  const handleDoubleTap = (e: React.MouseEvent) => {
+    if (!isLiked) {
+      handleLike();
+    }
+    setShowHeart(true);
+    // Haptic feedback if available
+    if (window.navigator && window.navigator.vibrate) {
+      window.navigator.vibrate(50);
+    }
+    setTimeout(() => setShowHeart(false), 500);
+  };
+
+  useEffect(() => {
+    const syncFollow = () => {
+      setIsFollowing(isUserFollowed(authorIdentifier));
+    };
+    window.addEventListener('followedUsersUpdated', syncFollow);
+    return () => window.removeEventListener('followedUsersUpdated', syncFollow);
+  }, [authorIdentifier]);
+
+  const handleToggleFollow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser?.id) {
+      toast.error('🔐 Please Login or Register to Follow creators!');
+      window.dispatchEvent(new CustomEvent('openAuthModal'));
+      return;
+    }
+    const next = toggleFollowUser(authorIdentifier);
+    setIsFollowing(next);
+    if (next) {
+      toast.success(`Following ${reel?.user?.name || authorIdentifier}`);
+    } else {
+      toast.success(`Unfollowed ${reel?.user?.name || authorIdentifier}`);
+    }
+    
+    // Sync with backend
+    try {
+      await fetch(`/api/users/${authorIdentifier}/follow`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followerId: currentUser.id })
+      });
+    } catch (err) {
+      console.error('Failed to sync follow status with backend:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (reel?.id) {
+      safeFetch(`/api/posts/${reel.id}/comments`)
+        .then(data => {
+          if (Array.isArray(data)) {
+            setComments(data);
+            if (data.length > 0) setCommentsCount(data.length);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [reel?.id]);
+
+  const togglePlay = () => {
+    if (isPlaying) {
+      videoRef.current?.pause();
+      audioRef.current?.pause();
+      setIsPlaying(false);
+    } else {
+      const vp = videoRef.current?.play();
+      if (vp !== undefined) vp.catch(()=>{});
+      const ap = audioRef.current?.play();
+      if (ap !== undefined) ap.catch(()=>{});
+      setIsPlaying(true);
+    }
+  };
+
+  const handleLike = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!currentUser?.id) {
+      toast.error('🔐 Please Login or Register to Like reels!');
+      window.dispatchEvent(new CustomEvent('openAuthModal'));
+      return;
+    }
+    
+    const wasLiked = isLiked;
+    const nextLiked = !wasLiked;
+    setIsLiked(nextLiked);
+    setLikesCount(prev => nextLiked ? prev + 1 : Math.max(0, prev - 1));
+
+    try {
+      // 1. Sync directly to Firestore
+      togglePostLikeInFirestore(reel.id, currentUser.id, wasLiked).catch(e => console.warn('Firestore like sync:', e));
+
+      // 2. Call backend API
+      const res = await safeFetch(`/api/posts/${reel.id}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      if (res && res.likesCount !== undefined) {
+        setLikesCount(res.likesCount);
+        if (res.isLiked !== undefined) setIsLiked(res.isLiked);
+      }
+      if (nextLiked) toast.success('❤️ Liked reel!');
+    } catch (err) {
+      console.warn('Like request fallback:', err);
+      // Keep optimistic state since user intended to like
+    }
+  };
+
+  const handleSave = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser?.id) {
+      toast.error('🔐 Please Login or Register to Save reels!');
+      window.dispatchEvent(new CustomEvent('openAuthModal'));
+      return;
+    }
+    const wasSaved = isSaved;
+    setIsSaved(!wasSaved);
+    setSavedCount(prev => wasSaved ? Math.max(0, prev - 1) : prev + 1);
+
+    try {
+      const res = await safeFetch(`/api/posts/${reel.id}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser?.id })
+      });
+      if (res.success) {
+        setIsSaved(res.isSaved);
+        setSavedCount(res.savedCount);
+        toast.success(res.isSaved ? 'Saved reel!' : 'Removed from saved');
+      }
+    } catch (err) {
+      setIsSaved(wasSaved);
+      setSavedCount(prev => wasSaved ? prev + 1 : Math.max(0, prev - 1));
+      toast.error('Failed to update save');
+    }
+  };
+
+  const isReelOwnerOrAdmin = Boolean(
+    !currentUser ||
+    !(reel?.userId || reel?.user?.id) ||
+    String(currentUser?.id) === String(reel?.userId || reel?.user?.id) ||
+    currentUser?.role?.toLowerCase() === 'admin' ||
+    currentUser?.role === 'Master Admin' ||
+    currentUser?.isAdmin
+  );
+
+  const handleDelete = async () => {
+    const toastId = toast.loading('Deleting reel...');
+    try {
+      // 1. Direct Firestore Deletion
+      await deletePostFromFirestore(reel.id);
+
+      // 2. Server API Deletion
+      try {
+        await safeFetch(`/api/posts/${reel.id}`, {
+          method: 'DELETE'
+        });
+      } catch (apiErr) {
+        console.warn('API delete note:', apiErr);
+      }
+
+      toast.success('🗑️ Reel deleted successfully', { id: toastId });
+      setShowOptionsModal(false);
+      if (onClose) onClose();
+      // Notify other components
+      window.dispatchEvent(new CustomEvent('reelDeleted', { detail: { reelId: reel.id } }));
+      window.dispatchEvent(new CustomEvent('postDeleted', { detail: { postId: reel.id } }));
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to delete reel', { id: toastId });
+    }
+  };
+
+  const handleNotInterested = async () => {
+    if (!currentUser?.id) {
+      toast.error('Please login first');
+      return;
+    }
+    try {
+      await fetch(`/api/posts/${reel.id}/not-interested`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      toast.success('Reel marked as Not Interested. Hidden from your feed.');
+      setShowOptionsModal(false);
+      if (onClose) onClose();
+      window.dispatchEvent(new CustomEvent('reelDeleted', { detail: { reelId: reel.id } }));
+      window.dispatchEvent(new CustomEvent('postDeleted', { detail: { postId: reel.id } }));
+    } catch (err) {
+      toast.error('Failed to update preference');
+    }
+  };
+
+  const handleShare = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (currentUser?.id) {
+      fetch(`/api/posts/${reel.id}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      }).catch(console.error);
+    }
+    if (navigator.share) {
+      navigator.share({
+        title: reel?.title || 'Vyapar Bridge Reel',
+        text: reel?.content || 'Check out this Reel on Vyapar Bridge B2B Network!',
+        url: window.location.href,
+      }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(window.location.href);
+      toast.success('Reel link copied!');
+    }
+    setSharesCount(prev => prev + 1);
+  };
+
+  const handleAddComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!commentText.trim()) return;
+
+    setIsSubmittingComment(true);
+    const content = commentText;
+    setCommentText('');
+
+    try {
+      const res = await fetch(`/api/posts/${reel?.id || '101'}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content,
+          userId: currentUser?.id || '1'
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.comment) {
+        setComments(prev => [...prev, data.comment]);
+        setCommentsCount(prev => prev + 1);
+        toast.success('Comment posted!');
+      } else {
+        const localComment = {
+          id: 'c' + Date.now(),
+          content,
+          createdAt: Date.now(),
+          user: currentUser || { name: 'You' }
+        };
+        setComments(prev => [...prev, localComment]);
+        setCommentsCount(prev => prev + 1);
+        toast.success('Comment posted!');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Error posting comment');
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isPlaying && isActive) {
+      const vp = videoRef.current?.play();
+      if (vp !== undefined) vp.catch(() => {});
+      const ap = audioRef.current?.play();
+      if (ap !== undefined) ap.catch(() => {});
+    } else {
+      videoRef.current?.pause();
+      audioRef.current?.pause();
+    }
+  }, [isPlaying, isActive]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.muted = isMuted;
+      audioRef.current.volume = reel?.musicVolume !== undefined ? reel.musicVolume : 1;
+    }
+    if (videoRef.current) {
+      if (isMuted) {
+        videoRef.current.muted = true;
+      } else {
+        const hasCustomOriginalVolume = reel?.originalVolume !== undefined;
+        videoRef.current.muted = hasCustomOriginalVolume ? reel.originalVolume === 0 : (reelMusic ? true : false);
+        videoRef.current.volume = hasCustomOriginalVolume ? reel.originalVolume : (reelMusic ? 0 : 1);
+      }
+    }
+  }, [isMuted, reelMusic, reel?.originalVolume, reel?.musicVolume]);
+
+  return (
+    <div className="relative w-full max-w-[420px] h-[85vh] sm:h-[88vh] max-h-[820px] bg-black rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between select-none border border-zinc-800">
+      {/* Top Header Overlay */}
+      <div className="absolute top-0 inset-x-0 p-4 flex items-center justify-between text-white z-20 bg-gradient-to-b from-black/80 via-black/40 to-transparent">
+        <div className="flex items-center gap-2">
+          {onClose && (
+            <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-full text-white transition-colors cursor-pointer mr-1">
+              <XCircle className="w-6 h-6" />
+            </button>
+          )}
+          <span className="font-bold text-base tracking-wide flex items-center gap-1.5 drop-shadow-md">
+            Reels <Sparkles className="w-4 h-4 text-amber-300" />
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={(e) => { e.stopPropagation(); setFitMode(prev => prev === 'contain' ? 'cover' : 'contain'); }} 
+            className="p-1.5 px-2.5 bg-black/50 hover:bg-black/70 rounded-full text-white text-[11px] font-semibold backdrop-blur-md transition-all border border-white/20 flex items-center gap-1 cursor-pointer" 
+            title="Toggle Aspect Ratio (Original vs Fill)"
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span>{fitMode === 'contain' ? 'Original Ratio' : 'Fill Screen'}</span>
+          </button>
+          <button onClick={toggleMute} className="p-2 bg-black/40 hover:bg-black/60 rounded-full text-white backdrop-blur-md transition-colors cursor-pointer" title={isMuted ? "Unmute" : "Mute"}>
+            {isMuted ? <VolumeX className="w-5 h-5 text-red-400" /> : <Volume2 className="w-5 h-5" />}
+          </button>
+          <button onClick={() => setShowOptionsModal(true)} className="p-2 bg-black/40 hover:bg-black/60 rounded-full text-white backdrop-blur-md transition-colors cursor-pointer">
+            <MoreHorizontal className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Audio Track for custom music */}
+      {reelMusic?.audioUrl && (
+        <audio 
+          ref={(el) => {
+            if (audioRef) audioRef.current = el;
+            if (el && el.paused) { const p = el.play(); if (p !== undefined) p.catch(()=>{}); }
+          }}
+          src={reelMusic.audioUrl} 
+          loop 
+          muted={isMuted}
+          className="hidden"
+        />
+      )}
+
+      {/* Main Media Player Canvas - Preserves Original Aspect Ratio (19:6, 16:9, 4:3, 1:1, 9:16) */}
+      <div className="absolute inset-0 flex items-center justify-center bg-zinc-950 overflow-hidden">
+        {/* Interaction Overlay */}
+        <div 
+          className="absolute inset-0 z-20 cursor-pointer" 
+          onClick={handleInteractionClick}
+        />
+
+        {/* Central Volume Indicator Overlay */}
+        <AnimatePresence>
+          {showVolumeIndicator && (
+            <div className="absolute inset-0 z-[25] flex items-center justify-center pointer-events-none">
+              <motion.div 
+                initial={{ scale: 0.5, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.5, opacity: 0 }}
+                className="w-20 h-20 rounded-full bg-black/60 backdrop-blur-md border border-white/20 flex items-center justify-center shadow-2xl"
+              >
+                {isMuted ? (
+                  <VolumeX className="w-10 h-10 text-white" />
+                ) : (
+                  <Volume2 className="w-10 h-10 text-white" />
+                )}
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Double Tap Heart Animation */}
+        <AnimatePresence>
+          {showHeart && (
+            <div className="absolute inset-0 z-[40] flex items-center justify-center pointer-events-none">
+              <motion.div
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: [0, 1.2, 1], opacity: [0, 1, 1, 0] }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.8, times: [0, 0.4, 0.8, 1] }}
+                className="text-white drop-shadow-[0_0_15px_rgba(239,68,68,0.8)]"
+              >
+                <Heart className="w-24 h-24 fill-red-500 text-red-500" />
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Ambient Blurred Background for letterboxed content */}
+        {fitMode === 'contain' && (
+          <div className="absolute inset-0 pointer-events-none opacity-30 overflow-hidden">
+            {(mediaSrc.includes('youtube.com') || mediaSrc.includes('youtu.be') || mediaSrc.includes('facebook.com') || mediaSrc.includes('fb.watch')) ? (
+               <AdMediaDisplay ad={{ type: 'video', mediaUrl: mediaSrc }} className="w-full h-full object-cover blur-3xl scale-125" />
+            ) : isVideo && mediaSrc ? (
+              <video preload="auto" 
+                src={mediaSrc} 
+                loop 
+                muted 
+                playsInline 
+                className="w-full h-full object-cover blur-3xl scale-125 transform-gpu will-change-transform" 
+                ref={(el) => {
+                  if (el && el.paused) {
+                    const p = el.play();
+                    if (p !== undefined) p.catch(() => {});
+                  }
+                }}
+              />
+            ) : mediaSrc ? (
+              <img src={mediaSrc} alt="" className="w-full h-full object-cover blur-3xl scale-125" />
+            ) : null}
+          </div>
+        )}
+
+        {/* Sharp Foreground Media in Original Aspect Ratio */}
+        {(mediaSrc.includes('youtube.com') || mediaSrc.includes('youtu.be') || mediaSrc.includes('facebook.com') || mediaSrc.includes('fb.watch')) ? (
+          <AdMediaDisplay ad={{ type: 'video', mediaUrl: mediaSrc }} className={cn("relative z-10 w-full h-full pointer-events-auto", fitMode === 'contain' ? "object-contain" : "object-cover")} />
+        ) : isVideo && mediaSrc ? (
+          <video preload="auto" 
+            ref={(el) => {
+              // Combine user ref with local ref
+              if (typeof videoRef === 'function') videoRef(el);
+              else if (videoRef) videoRef.current = el;
+              if (el) {
+                const p = el.play();
+                if (p !== undefined) p.catch(() => {});
+              }
+            }}
+            src={mediaSrc} 
+            poster={reel?.thumbnailUrl}
+            loop 
+            muted={isMuted}
+            playsInline
+            className={cn(
+              "relative z-10 transition-all duration-800 max-h-full max-w-full m-auto",
+              fitMode === 'contain' ? "object-contain w-full h-full" : "object-cover w-full h-full"
+            )} 
+          />
+        ) : (
+          <img 
+            src={mediaSrc} 
+            alt={reel?.title || 'Reel media'} 
+            className={cn(
+              "relative z-10 transition-all duration-800 max-h-full max-w-full m-auto",
+              fitMode === 'contain' ? "object-contain w-full h-full" : "object-cover w-full h-full"
+            )} 
+            onError={(e) => {
+              e.currentTarget.src = 'https://images.unsplash.com/photo-1615971677499-5467cbab01c0?auto=format&fit=crop&w=800&q=80';
+            }}
+          />
+        )}
+
+        {!isPlaying && isVideo && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/30 backdrop-blur-[1px]">
+            <div className="w-16 h-16 rounded-full bg-black/60 text-white flex items-center justify-center pl-1 border border-white/20 shadow-xl">
+              <svg className="w-8 h-8 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right Side Vertical Action Column */}
+      <div className="absolute right-3.5 bottom-10 z-20 flex flex-col items-center gap-4">
+        {/* Like Button */}
+        <button 
+          onClick={handleLike}
+          className="flex flex-col items-center gap-1 text-white group cursor-pointer"
+        >
+          <div className={cn(
+            "w-11 h-11 rounded-full flex items-center justify-center backdrop-blur-md transition-all group-active:scale-125",
+            isLiked ? "bg-red-500/30 text-red-500 border border-red-500/50" : "bg-black/40 hover:bg-black/60 text-white border border-white/10"
+          )}>
+            <Heart 
+              className={cn("w-6 h-6 transition-transform", isLiked && "scale-110")} 
+              fill={isLiked ? "#ef4444" : "none"} 
+              stroke={isLiked ? "#ef4444" : "currentColor"}
+            />
+          </div>
+          <span className="text-[11px] font-bold drop-shadow-md">{likesCount > 999 ? (likesCount/1000).toFixed(1) + 'K' : likesCount}</span>
+        </button>
+
+        {/* Comment Button */}
+        <button 
+          onClick={(e) => { e.stopPropagation(); setShowCommentsDrawer(!showCommentsDrawer); }}
+          className="flex flex-col items-center gap-1 text-white group cursor-pointer"
+        >
+          <div className="w-11 h-11 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md border border-white/10 flex items-center justify-center transition-all group-active:scale-125">
+            <MessageCircle className="w-6 h-6" />
+          </div>
+          <span className="text-[11px] font-bold drop-shadow-md">{commentsCount}</span>
+        </button>
+
+        {/* Share Button */}
+        <button 
+          onClick={handleShare}
+          className="flex flex-col items-center gap-1 text-white group cursor-pointer"
+        >
+          <div className="w-11 h-11 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md border border-white/10 flex items-center justify-center transition-all group-active:scale-125">
+            <svg aria-label="Share" className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M22 3L9.218 10.083 11.698 20.334 22 3z" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"/><polygon points="11.698 20.334 22 3 2 3 9.218 10.084 11.698 20.334" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"/></svg>
+          </div>
+          <span className="text-[11px] font-bold drop-shadow-md">{sharesCount}</span>
+        </button>
+
+        {/* Bookmark / Save Button */}
+        <button 
+          onClick={handleSave}
+          className="flex flex-col items-center gap-1 text-white group cursor-pointer"
+        >
+          <div className={cn(
+            "w-11 h-11 rounded-full flex items-center justify-center backdrop-blur-md transition-all group-active:scale-125",
+            isSaved ? "bg-amber-500/30 text-amber-400 border border-amber-500/50" : "bg-black/40 hover:bg-black/60 text-white border border-white/10"
+          )}>
+            <Bookmark 
+              className={cn("w-6 h-6 transition-transform", isSaved && "scale-110")} 
+              fill={isSaved ? "#f59e0b" : "none"} 
+              stroke={isSaved ? "#f59e0b" : "currentColor"}
+            />
+          </div>
+          <span className="text-[11px] font-bold drop-shadow-md">{savedCount}</span>
+        </button>
+
+        {/* Inquiry / Chat Button - Especially for Customers */}
+        <button 
+          onClick={(e) => { 
+            e.stopPropagation(); 
+            
+            // Distance Check for Local Customer Members
+            if (currentUser?.role === 'customer' && currentUser?.membershipType === 'local') {
+              const targetCoords = reel?.user?.gpsCoords || reel?.gpsCoords;
+              if (userLocation && targetCoords) {
+                const dist = calculateDistance(userLocation.lat, userLocation.lng, targetCoords.lat, targetCoords.lng);
+                if (dist > 100) {
+                  toast.error(`📍 Distance Restriction: As a Local Member, you can only inquire with dealers within 100km. This business is ${Math.round(dist)}km away. Upgrade to 'Direct Company' plan for nationwide access!`);
+                  return;
+                }
+              } else if (!userLocation) {
+                toast.error("📍 Please enable GPS/Location to verify distance for Local Membership.");
+                return;
+              }
+            }
+
+            if (onClose) onClose();
+            navigate('/chat'); 
+          }}
+          className="flex flex-col items-center gap-1 text-white group cursor-pointer"
+          title="Inquire about this material"
+        >
+          <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 backdrop-blur-md border border-white/20 flex items-center justify-center transition-all group-active:scale-125 shadow-lg shadow-emerald-500/20">
+            <MessageSquare className="w-5 h-5 text-white" />
+          </div>
+          <span className="text-[10px] font-black drop-shadow-md tracking-tighter uppercase text-emerald-400">Inquiry</span>
+        </button>
+
+        {/* Star Rating Button (Public AI Rating & Feedback - No Login Needed) */}
+        <button 
+          onClick={(e) => { e.stopPropagation(); setShowRatingModal(true); }}
+          className="flex flex-col items-center gap-1 text-white cursor-pointer hover:scale-105 transition-transform"
+          title="Rate Reel with Stars (AI Auto Visibility Boost)"
+        >
+          <div className="w-11 h-11 rounded-full bg-gradient-to-tr from-amber-500/80 to-yellow-400/80 hover:from-amber-500 hover:to-yellow-400 backdrop-blur-md border border-amber-300/40 flex items-center justify-center transition-all shadow-lg shadow-amber-500/20">
+            <Star className="w-5 h-5 text-amber-100 fill-amber-200" />
+          </div>
+          <span className="text-[10px] font-black text-amber-300 drop-shadow-md tracking-tight">{reelRating.toFixed(1)}★</span>
+        </button>
+
+        {/* Insights Display */}
+        <button 
+          onClick={(e) => { e.stopPropagation(); setShowStatsModal(true); }}
+          className="flex flex-col items-center gap-1 text-white cursor-pointer hover:scale-105 transition-transform"
+          title="View detailed post insights & activity log"
+        >
+          <div className="w-11 h-11 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md border border-white/10 flex items-center justify-center transition-all">
+            <BarChart2 className="w-5 h-5 text-blue-400" />
+          </div>
+          <span className="text-[10px] font-bold drop-shadow-md tracking-tight">Insights</span>
+        </button>
+
+        {/* More Options (...) */}
+        <button 
+          onClick={(e) => { e.stopPropagation(); setShowOptionsModal(true); }}
+          className="flex flex-col items-center text-white cursor-pointer"
+        >
+          <div className="w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-md border border-white/10 flex items-center justify-center">
+            <MoreHorizontal className="w-5 h-5" />
+          </div>
+        </button>
+      </div>
+
+      {/* Bottom Left Info & Caption Overlay */}
+      <div className="absolute left-3.5 bottom-4 right-16 z-20 text-white drop-shadow-lg flex flex-col gap-2">
+        {/* User profile row */}
+        <div className="flex items-center gap-2.5">
+          <div 
+            onClick={(e) => { e.stopPropagation(); if (onClose) onClose(); navigate(`/profile/${authorIdentifier}`); }}
+            className={cn(
+            "w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-xs font-bold cursor-pointer hover:scale-105 transition-transform",
+            isAuthorVerified ? "tiranga-border-circle" : "neon-border-circle"
+          )}>
+            <div className="w-full h-full bg-black rounded-full p-[1px] overflow-hidden">
+              {authorAvatar ? (
+                <img src={authorAvatar} alt={authorName} className="w-full h-full object-cover" />
+              ) : (
+                authorName.charAt(0)
+              )}
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span 
+              onClick={(e) => { e.stopPropagation(); if (onClose) onClose(); navigate(`/profile/${authorIdentifier}`); }}
+              className="font-bold text-sm tracking-wide flex items-center gap-1 text-white cursor-pointer hover:underline"
+            >
+              {authorName}
+              {isAuthorVerified && <VerifiedBadge size="sm" />}
+            </span>
+            <button 
+              onClick={handleToggleFollow}
+              className={cn(
+                "text-[11px] font-bold px-2.5 py-0.5 rounded-full border transition-all cursor-pointer ml-1",
+                isFollowing 
+                  ? "bg-white/20 text-white border-white/30" 
+                  : "bg-blue-600 hover:bg-blue-700 text-white border-blue-500"
+              )}
+            >
+              {isFollowing ? 'Following' : 'Follow'}
+            </button>
+          </div>
+        </div>
+
+        {/* Music / Audio Track Ticker */}
+        <div className="flex items-center gap-1.5 text-xs text-zinc-200 font-medium bg-black/40 backdrop-blur-md px-2.5 py-1 rounded-full w-fit max-w-[240px] truncate border border-white/10">
+          <span className="text-blue-400">🎵</span>
+          <span className="truncate">
+            {reelMusic ? `${reelMusic.title} • ${reelMusic.artist}` : `${authorName} • Original Audio`}
+          </span>
+        </div>
+
+        {/* Caption text with "... more" toggle */}
+        <div className="text-xs sm:text-sm text-zinc-100 pr-2 leading-relaxed">
+          {reel?.title && <div className="font-bold text-white mb-0.5">{reel.title}</div>}
+          <p className={cn("transition-all", !showMore && "line-clamp-2")}>
+            {reel?.content || 'Vyapar Bridge B2B Manufacturing and Vitrified Ceramics Collection.'}
+          </p>
+          {reel?.hashtags && (
+            <p className="text-blue-300 font-semibold mt-1 text-xs">{reel.hashtags}</p>
+          )}
+          {reel?.content && reel.content.length > 50 && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); setShowMore(!showMore); }}
+              className="text-zinc-400 font-bold hover:text-white text-xs mt-0.5 cursor-pointer inline-block"
+            >
+              {showMore ? 'less' : '... more'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Comments Drawer / Sliding Panel */}
+      {showCommentsDrawer && (
+        <div className="absolute inset-x-0 bottom-0 top-1/3 bg-zinc-950/95 backdrop-blur-2xl rounded-t-2xl z-40 p-4 border-t border-zinc-800 flex flex-col justify-between shadow-2xl animate-in slide-in-from-bottom duration-700" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-3 mb-2">
+            <span className="font-bold text-sm text-white flex items-center gap-2">
+              Comments ({comments.length || commentsCount})
+            </span>
+            <button onClick={() => setShowCommentsDrawer(false)} className="text-zinc-400 hover:text-white p-1 cursor-pointer">
+              <XCircle className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-3 my-2 pr-1 scrollbar-thin">
+            {comments.map((c, i) => (
+              <div key={c.id || i} className="flex items-start gap-2.5 text-xs text-white">
+                <div className="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center font-bold text-[11px] text-zinc-300 shrink-0 overflow-hidden">
+                  {c.user?.avatarUrl ? (
+                    <img src={c.user.avatarUrl} alt={c.user.name} className="w-full h-full object-cover" />
+                  ) : (
+                    c.user?.name?.charAt(0) || 'U'
+                  )}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-zinc-200">{c.user?.name || 'Vyapar Bridge Member'}</span>
+                  </div>
+                  <p className="text-zinc-300 mt-0.5 leading-normal">{c.content}</p>
+                  <button 
+                    onClick={() => setCommentText('@' + (c.user?.name?.replace(/\s+/g, '') || 'User') + ' ')} 
+                    className="text-[10px] text-zinc-500 font-bold hover:text-zinc-300 mt-1 cursor-pointer"
+                  >
+                    Reply
+                  </button>
+                </div>
+              </div>
+            ))}
+            {comments.length === 0 && (
+              <div className="text-center py-8 text-zinc-500 text-xs">No comments yet. Be the first to comment!</div>
+            )}
+          </div>
+
+          <form onSubmit={handleAddComment} className="pt-2 border-t border-zinc-800 flex items-center gap-2">
+            <input 
+              type="text" 
+              value={commentText}
+              onChange={e => setCommentText(e.target.value)}
+              placeholder="Write a comment..."
+              className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+            />
+            <button type="submit" disabled={!commentText.trim()} className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3 py-2 rounded-lg disabled:opacity-40 cursor-pointer">
+              Send
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Options Modal */}
+      {showOptionsModal && (
+        <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setShowOptionsModal(false)}>
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-xs rounded-2xl overflow-hidden shadow-2xl text-white text-sm" onClick={e => e.stopPropagation()}>
+            <button onClick={handleShare} className="w-full text-left px-4 py-3 hover:bg-zinc-800 border-b border-zinc-800 font-semibold text-blue-400 cursor-pointer">
+              Share Reel Link
+            </button>
+            <button onClick={(e) => { handleSave(e); setShowOptionsModal(false); }} className="w-full text-left px-4 py-3 hover:bg-zinc-800 border-b border-zinc-800 font-semibold cursor-pointer">
+              {isSaved ? 'Remove from Saved' : 'Save Reel'}
+            </button>
+            <button onClick={handleNotInterested} className="w-full text-left px-4 py-3 hover:bg-zinc-800 border-b border-zinc-800 font-semibold text-amber-400 flex items-center gap-2 cursor-pointer">
+              <EyeOff className="w-4 h-4 text-amber-400" />
+              <span>Not Interested</span>
+            </button>
+            {isReelOwnerOrAdmin && (
+              <button onClick={handleDelete} className="w-full text-left px-4 py-3 hover:bg-zinc-800 border-b border-zinc-800 font-semibold text-red-500 cursor-pointer">
+                Delete Reel
+              </button>
+            )}
+            <button onClick={() => setShowOptionsModal(false)} className="w-full text-center py-3 hover:bg-zinc-800 font-bold text-zinc-400 cursor-pointer">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showStatsModal && (
+        <SinglePostStatsModal postId={reel.id} onClose={() => setShowStatsModal(false)} />
+      )}
+
+      {showRatingModal && (
+        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4" onClick={() => setShowRatingModal(false)}>
+          <div className="bg-zinc-900 border border-amber-500/30 w-full max-w-sm rounded-2xl p-5 shadow-2xl text-white space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
+                <h3 className="font-bold text-sm text-amber-200">Rate Reel (AI Visibility Boost)</h3>
+              </div>
+              <button onClick={() => setShowRatingModal(false)} className="text-zinc-400 hover:text-white cursor-pointer">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <p className="text-xs text-zinc-300">
+              आपकी रेटिंग सीधे हमारे AI रैंकिंग एल्गोरिदम को बढ़ावा देती है। स्टार रेटिंग देने से यह रील सभी यूज़र्स के फ़ीड में ऊपर दिखेगी।
+            </p>
+
+            <StarRatingFeedback 
+              postId={reel.id} 
+              currentRating={reelRating} 
+              ratingsCount={reelRatingsCount} 
+            />
+          </div>
+        </div>
+      )}</div>
+  );
+}
+

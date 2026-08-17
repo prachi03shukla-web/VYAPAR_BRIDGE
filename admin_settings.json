@@ -1,0 +1,89 @@
+{
+  "upiId": "Ashishybl",
+  "bankAccount": "9988776655443322",
+  "ifscCode": "SBIN0001234",
+  "accountName": "Ashish",
+  "qrCodeUrl": "",
+  "barcodeImageUrl": "/uploads/1786712207148-65606035.jpg",
+  "barcodeSecretToken": "SECURE-BC-1786712207151-HAD22P",
+  "aiModel": "gemini-1.5-flash",
+  "aiGuardrailActive": true,
+  "developerMasterPin": "ashish1224@#",
+  "barcodeUploadedAt": 1786712207151,
+  "brandAdsList": [
+    {
+      "id": "ad-1786790875312",
+      "type": "video",
+      "title": "Test2",
+      "companyName": "Vyapar Bridge Partner",
+      "mediaUrl": "https://youtube.com/watch?v=123",
+      "linkUrl": "",
+      "description": "",
+      "isActive": false,
+      "localMediaKey": null,
+      "createdAt": 1786790875312
+    },
+    {
+      "id": "ad-1786790801750",
+      "type": "image",
+      "title": "Test",
+      "companyName": "Vyapar Bridge Partner",
+      "mediaUrl": "https://youtube.com/watch?v=123",
+      "linkUrl": "",
+      "description": "",
+      "isActive": false,
+      "localMediaKey": null,
+      "createdAt": 1786790801750
+    },
+    {
+      "id": "ad-1786790768643",
+      "type": "video",
+      "title": "Bridge",
+      "companyName": "Vyapar",
+      "mediaUrl": "https://youtube.com/shorts/cwv6rpSSanw?si=467rk7KnaHPe6YDT",
+      "linkUrl": "Youtube ",
+      "description": "Vyapar bridge",
+      "isActive": false,
+      "localMediaKey": null,
+      "createdAt": 1786790768643
+    },
+    {
+      "mediaUrl": "https://youtube.com/shorts/cwv6rpSSanw?si=467rk7KnaHPe6YDT",
+      "createdAt": 1786792843527,
+      "type": "video",
+      "localMediaKey": null,
+      "description": "We are not a e commerce",
+      "title": "Bridge of commerce ",
+      "companyName": "VYAPAR BRIDGE",
+      "linkUrl": "Youtube",
+      "id": "ad-1786792843527",
+      "isActive": false
+    },
+    {
+      "id": "ad-1786794138692",
+      "createdAt": 1786794138692,
+      "mediaUrl": "https://youtube.com/shorts/LB0oC-tsemE?si=qclngPYSIn3K1aqF",
+      "title": "Brand",
+      "type": "video",
+      "companyName": "My brand",
+      "linkUrl": "B",
+      "description": "",
+      "localMediaKey": null,
+      "isActive": true,
+      "totalRating": 9,
+      "ratingCount": 2
+    },
+    {
+      "createdAt": 1786796274046,
+      "localMediaKey": null,
+      "description": "Bb",
+      "title": "B",
+      "id": "ad-1786796274046",
+      "isActive": true,
+      "mediaUrl": "https://youtube.com/shorts/LB0oC-tsemE?si=qclngPYSIn3K1aqF",
+      "companyName": "Brand",
+      "type": "video",
+      "linkUrl": "B"
+    }
+  ]
+}

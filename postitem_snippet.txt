@@ -1,0 +1,847 @@
+function PostItem({ 
+  post, 
+  currentUser, 
+  onPostDeleted, 
+  onPostUpdated, 
+  onReelClick, 
+  onPostClick,
+  userLocation
+}: { 
+  post: any, 
+  currentUser: any, 
+  onPostDeleted?: (id: string) => void, 
+  onPostUpdated?: (p: any) => void, 
+  onReelClick?: () => void, 
+  onPostClick?: () => void,
+  userLocation?: {lat: number, lng: number} | null
+}) {
+  const navigate = useNavigate();
+  const [isLiked, setIsLiked] = useState(post.isLiked || false);
+  const [isSaved, setIsSaved] = useState(post.isSaved || false);
+  const [isFollowing, setIsFollowing] = useState(() => isUserFollowed(post.userId));
+
+  useEffect(() => {
+    const syncFollow = () => {
+      setIsFollowing(isUserFollowed(post.userId));
+    };
+    window.addEventListener('followedUsersUpdated', syncFollow);
+    return () => window.removeEventListener('followedUsersUpdated', syncFollow);
+  }, [post.userId]);
+  const [likesCount, setLikesCount] = useState(() => post.likesCount || post.likes || 0);
+  useEffect(() => {
+    setIsLiked(post.isLiked || false);
+    setIsSaved(post.isSaved || false);
+    setLikesCount(post.likesCount || post.likes || 0);
+  }, [post.isLiked, post.isSaved, post.likesCount, post.likes]);
+  const [showHeartOverlay, setShowHeartOverlay] = useState(false);
+  const [viewsCount, setViewsCount] = useState(() => post.viewsCount || 0);
+  const [showOptions, setShowOptions] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [comments, setComments] = useState<any[]>([]);
+  const [newComment, setNewComment] = useState('');
+  const [commentImage, setCommentImage] = useState<File | null>(null);
+  const [commentImagePreview, setCommentImagePreview] = useState<string | null>(null);
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const commentFileInputRef = React.useRef<HTMLInputElement>(null);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editCommentText, setEditCommentText] = useState('');
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [showStatsModal, setShowStatsModal] = useState(false);
+
+  // Customer Requirements State
+  const [isReqModalOpen, setIsReqModalOpen] = useState(false);
+  const [reqTilesQty, setReqTilesQty] = useState('');
+  const [reqEwcQty, setReqEwcQty] = useState('');
+  const [reqMixerQty, setReqMixerQty] = useState('');
+  const [reqOther, setReqOther] = useState('');
+  const [isSubmittingReq, setIsSubmittingReq] = useState(false);
+
+  const handleSendRequirement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmittingReq(true);
+    try {
+      await fetch('/api/requirements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          targetId: post.userId,
+          tilesQty: reqTilesQty,
+          ewcQty: reqEwcQty,
+          mixerQty: reqMixerQty,
+          other: reqOther
+        })
+      });
+      setIsSubmittingReq(false);
+      setIsReqModalOpen(false);
+      setReqTilesQty('');
+      setReqEwcQty('');
+      setReqMixerQty('');
+      setReqOther('');
+      toast.success('🎉 Your requirements have been sent to the company successfully! They will contact you shortly.');
+    } catch (err) {
+      setIsSubmittingReq(false);
+      toast.error('Failed to send requirements');
+    }
+  };
+
+  const fetchComments = async () => {
+    try {
+      const data = await safeFetch(`/api/posts/${post.id}/comments`);
+      setComments(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    if (showComments) {
+      fetchComments();
+    }
+  }, [showComments]);
+
+  useEffect(() => {
+    // Unique view tracking on post mount (Real-time update)
+    if (post?.id) {
+      const trackView = () => {
+        fetch(`/api/posts/${post.id}/view`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUser?.id })
+        })
+        .then(res => (res.ok && res.headers.get('content-type')?.includes('application/json')) ? res.json() : null)
+        .then(data => {
+          if (data && data.viewsCount !== undefined) setViewsCount(data.viewsCount);
+          if (data && data.likesCount !== undefined) setLikesCount(data.likesCount);
+        })
+        .catch(err => console.warn('Failed to track view', err));
+      };
+
+      trackView();
+      // Poll for real-time counts every 15 seconds
+      const interval = setInterval(trackView, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [post.id]);
+
+  const handleLike = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!currentUser?.id) {
+      toast.error('🔐 Please Login or Register to Like posts!');
+      window.dispatchEvent(new CustomEvent('openAuthModal'));
+      return;
+    }
+    const wasLiked = isLiked;
+    const nextLiked = !wasLiked;
+    setIsLiked(nextLiked);
+    setLikesCount(prev => nextLiked ? prev + 1 : Math.max(0, prev - 1));
+    
+    try {
+      // 1. Sync to Firestore in real-time
+      togglePostLikeInFirestore(post.id, currentUser.id, wasLiked).catch(e => console.warn('Firestore like sync:', e));
+
+      // 2. Call backend API
+      const res = await fetch(`/api/posts/${post.id}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      const data = await res.json().catch(() => null);
+      if (data && data.success) {
+        if (data.isLiked !== undefined) setIsLiked(data.isLiked);
+        if (data.likesCount !== undefined) setLikesCount(data.likesCount);
+      }
+      if (nextLiked) {
+        setShowHeartOverlay(true);
+        setTimeout(() => setShowHeartOverlay(false), 900);
+      }
+    } catch (err) {
+      console.warn('Post like fallback:', err);
+      // Keep optimistic like count active
+    }
+  };
+
+  const handleSave = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!currentUser?.id) {
+      toast.error('🔐 Please Login or Register to Save posts!');
+      window.dispatchEvent(new CustomEvent('openAuthModal'));
+      return;
+    }
+    const wasSaved = isSaved;
+    setIsSaved(!wasSaved);
+    try {
+      const res = await fetch(`/api/posts/${post.id}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsSaved(data.isSaved);
+      }
+    } catch (err) {
+      setIsSaved(wasSaved);
+    }
+  };
+  
+  const handleFollow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser?.id) {
+      toast.error('🔐 Please Login or Register to Follow users!');
+      window.dispatchEvent(new CustomEvent('openAuthModal'));
+      return;
+    }
+    
+    // Optimistic update
+    const next = toggleFollowUser(post.userId);
+    setIsFollowing(next);
+    
+    try {
+      const response = await fetch(`/api/users/${post.userId}/follow`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followerId: currentUser.id })
+      });
+      const data = await response.json();
+      if (!data.success) {
+        toggleFollowUser(post.userId); // Revert
+        setIsFollowing(!next);
+        toast.error(data.error || 'Failed to update follow status');
+      }
+    } catch (err) {
+      toggleFollowUser(post.userId); // Revert
+      setIsFollowing(!next);
+      console.error(err);
+    }
+  };
+
+  const handleDoubleClickImage = () => {
+    if (!isLiked) {
+      handleLike();
+    }
+    setShowHeartOverlay(true);
+    setTimeout(() => setShowHeartOverlay(false), 500);
+  };
+
+  const isPostOwnerOrAdmin = Boolean(
+    !currentUser ||
+    !(post?.userId || post?.user?.id) ||
+    String(currentUser?.id) === String(post?.userId || post?.user?.id) ||
+    currentUser?.role?.toLowerCase() === 'admin' ||
+    currentUser?.role === 'Master Admin' ||
+    currentUser?.isAdmin
+  );
+
+  const handleNotInterestedPost = async () => {
+    if (!currentUser?.id) {
+      toast.error('Please login first');
+      return;
+    }
+    try {
+      await fetch(`/api/posts/${post.id}/not-interested`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      toast.success('Post marked as Not Interested. Hidden from your feed.');
+      if (onPostDeleted) onPostDeleted(post.id);
+      window.dispatchEvent(new CustomEvent('postDeleted', { detail: { postId: post.id } }));
+    } catch (e) {
+      toast.error('Failed to update preference');
+    }
+  };
+
+  const handleDeletePost = async () => {
+    const toastId = toast.loading('Deleting post...');
+    try {
+      // 1. Direct Firestore Deletion
+      await deletePostFromFirestore(post.id);
+
+      // 2. Server API Deletion
+      try {
+        await safeFetch(`/api/posts/${post.id}`, { method: 'DELETE' });
+      } catch (apiErr) {
+        console.warn('API delete note:', apiErr);
+      }
+
+      toast.success('🗑️ Post deleted successfully', { id: toastId });
+      if (onPostDeleted) onPostDeleted(post.id);
+      window.dispatchEvent(new CustomEvent('postDeleted', { detail: { postId: post.id } }));
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to delete post', { id: toastId });
+    }
+    setShowOptions(false);
+  };
+
+  const handleAddComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newComment.trim() && !commentImage) return;
+
+    setIsSubmittingComment(true);
+    try {
+      const formData = new FormData();
+      formData.append('content', newComment);
+      formData.append('userId', currentUser.id);
+      if (commentImage) {
+        formData.append('image', commentImage);
+      }
+
+      const res = await fetch(`/api/posts/${post.id}/comments`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok || data.blocked) {
+        toast.error(data.error || '⛔ AI Safety Guardrail: Comment blocked due to offensive language or adult content.');
+        return;
+      }
+      if (data.success) {
+        setComments([...comments, data.comment]);
+        setNewComment('');
+        setCommentImage(null);
+        setCommentImagePreview(null);
+        toast.success('Comment posted!');
+      }
+    } catch (e) {
+      toast.error('Failed to add comment');
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  };
+
+  const handleCommentImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setCommentImage(file);
+      setCommentImagePreview(URL.createObjectURL(file));
+    }
+  };
+
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+
+  const handleBlockUser = async () => {
+    if (!currentUser || currentUser.id === post.userId) return;
+    if (!confirm(`Block ${post.user?.name || 'this user'}? Their content will be hidden from your feed.`)) return;
+    try {
+      const res = await fetch(`/api/users/${post.userId}/block`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blockerId: currentUser.id })
+      });
+      const data = await res.json();
+      if (data.isBlocked) {
+        toast.success(`User ${post.user?.name || ''} blocked!`);
+        if (onPostDeleted) onPostDeleted(post.id);
+      }
+    } catch (err) {
+      toast.error('Failed to block user');
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!confirm('Delete comment?')) return;
+    try {
+      await fetch(`/api/comments/${commentId}`, { method: 'DELETE' });
+      setComments(comments.filter(c => c.id !== commentId));
+      toast.success('Comment deleted');
+    } catch (e) {
+      toast.error('Failed to delete comment');
+    }
+  };
+
+  const startEditComment = (comment: any) => {
+    setEditingCommentId(comment.id);
+    setEditCommentText(comment.content);
+  };
+
+  const handleUpdateComment = async (commentId: string) => {
+    if (!editCommentText.trim()) return;
+    try {
+      const res = await fetch(`/api/comments/${commentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editCommentText })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setComments(comments.map(c => c.id === commentId ? data.comment : c));
+        setEditingCommentId(null);
+        setEditCommentText('');
+      }
+    } catch (e) {
+      toast.error('Failed to update comment');
+    }
+  };
+
+  return (
+    <div className="bg-[#E6C76C] dark:bg-black border-b border-neutral-100 dark:border-neutral-900 md:border md:border-neutral-200 dark:md:border-neutral-800 md:rounded-xl pb-4 mb-5 w-full mx-auto shadow-sm">
+      {/* Post Header */}
+      <div className="flex items-center justify-between p-3 relative">
+        <div className="flex items-center gap-3">
+           <div 
+             onClick={() => navigate(`/profile/${post.userId}`)}
+             className={cn(
+             "w-9 h-9 rounded-full cursor-pointer shrink-0 transition-transform hover:scale-105",
+             (post.user?.isVerified || (currentUser?.id === post.userId && currentUser?.isVerified))
+               ? "tiranga-border-circle p-[2px]"
+               : "neon-border-circle p-[2px]"
+           )}>
+             <div className="w-full h-full bg-[#E6C76C] dark:bg-black rounded-full p-[1px] overflow-hidden">
+               <div className="w-full h-full bg-slate-100 dark:bg-zinc-900 rounded-full flex items-center justify-center text-xs font-bold text-black/80 dark:text-zinc-300">
+                 {post.user?.avatarUrl || post.avatar ? (
+                   <img src={post.user?.avatarUrl || post.avatar} alt={post.user?.name || post.userName || 'Profile'} className="w-full h-full object-cover rounded-full" />
+                 ) : post.user?.name || post.userName ? (
+                   <span className="text-xs uppercase font-extrabold">{String(post.user?.name || post.userName).charAt(0)}</span>
+                 ) : (
+                   <img src={BRAND_LOGO_SRC} alt="Vyapar Bridge" className="w-full h-full object-cover rounded-full" />
+                 )}
+               </div>
+             </div>
+           </div>
+           <div className="flex flex-col">
+              <div className="flex items-center gap-1">
+                <span 
+                  onClick={() => navigate(`/profile/${post.userId}`)}
+                  className={cn(
+                    "font-black italic tracking-wider text-sm text-black dark:text-zinc-50 leading-none cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 hover:underline",
+                    (post.user?.isVerified || (currentUser?.id === post.userId && currentUser?.isVerified)) && "text-blue-600 dark:text-blue-400 font-bold"
+                  )}
+                  style={{ fontFamily: "'Playfair Display', 'Dancing Script', serif", fontWeight: 900 }}
+                >
+                  {post.user?.name || post.userName || 'Verified Enterprise'}
+                </span>
+                {(post.user?.isVerified || (currentUser?.id === post.userId && currentUser?.isVerified)) && (
+                  <VerifiedBadge size="sm" />
+                )}
+                {currentUser?.id !== post.userId && (
+                  <div className="flex items-center">
+                    <span className="text-slate-300 dark:text-zinc-700 mx-1.5 text-[10px]">•</span>
+                    <button 
+                      onClick={handleFollow}
+                      className={cn(
+                        "text-[12px] font-bold transition-all duration-700 active:scale-95",
+                        isFollowing 
+                          ? "text-black/70 dark:text-zinc-500 hover:text-black dark:hover:text-zinc-300" 
+                          : "text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
+                      )}
+                    >
+                      {isFollowing ? 'Following' : 'Follow'}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {post.user?.role !== 'customer' && (
+                <span className="text-[11px] text-black/70 dark:text-zinc-400">{post.user?.role}</span>
+              )}
+           </div>
+        </div>
+        <div className="relative">
+          <button onClick={() => setShowOptions(!showOptions)} className="text-black dark:text-zinc-50 hover:text-black/70 dark:hover:text-zinc-400 dark:text-zinc-400 p-1">
+            <MoreHorizontal className="w-5 h-5" />
+          </button>
+          {showOptions && (
+            <div className="absolute right-0 mt-2 w-52 bg-white dark:bg-zinc-900 rounded-xl shadow-2xl z-20 border border-slate-200 dark:border-zinc-800 overflow-hidden text-sm">
+              {isPostOwnerOrAdmin ? (
+                <>
+                  <button onClick={() => { setIsEditModalOpen(true); setShowOptions(false); }} className="w-full text-left px-4 py-3 text-black dark:text-zinc-50 font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800 border-b border-slate-100 dark:border-zinc-800">
+                    Edit Post
+                  </button>
+                  <button onClick={handleDeletePost} className="w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-slate-50 dark:hover:bg-zinc-800 border-b border-slate-100 dark:border-zinc-800">
+                    Delete Post
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button 
+                    onClick={() => { setIsReportModalOpen(true); setShowOptions(false); }} 
+                    className="w-full text-left px-4 py-3 text-red-600 font-bold hover:bg-red-50 dark:hover:bg-red-950/40 border-b border-slate-100 dark:border-zinc-800 flex items-center gap-2"
+                  >
+                    <ShieldAlert className="w-4 h-4 text-red-500" />
+                    <span>Report Post / Nudity</span>
+                  </button>
+                  <button 
+                    onClick={() => { handleBlockUser(); setShowOptions(false); }} 
+                    className="w-full text-left px-4 py-3 text-red-600 font-bold hover:bg-red-50 dark:hover:bg-red-950/40 border-b border-slate-100 dark:border-zinc-800 flex items-center gap-2"
+                  >
+                    <UserX className="w-4 h-4 text-red-500" />
+                    <span>Block User</span>
+                  </button>
+                </>
+              )}
+              <button 
+                onClick={() => { handleNotInterestedPost(); setShowOptions(false); }} 
+                className="w-full text-left px-4 py-3 text-amber-600 dark:text-amber-400 font-bold hover:bg-slate-50 dark:hover:bg-zinc-800 border-b border-slate-100 dark:border-zinc-800 flex items-center gap-2 cursor-pointer"
+              >
+                <EyeOff className="w-4 h-4 text-amber-500" />
+                <span>Not Interested</span>
+              </button>
+              <button onClick={() => { setIsShareModalOpen(true); setShowOptions(false); }} className="w-full text-left px-4 py-3 text-black dark:text-zinc-50 hover:bg-slate-50 dark:hover:bg-zinc-800 border-b border-slate-100 dark:border-zinc-800">
+                Share Post
+              </button>
+              <button onClick={() => setShowOptions(false)} className="w-full text-left px-4 py-3 text-black/70 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {/* Report Modal */}
+          <ReportModal
+            isOpen={isReportModalOpen}
+            onClose={() => setIsReportModalOpen(false)}
+            currentUser={currentUser}
+            targetType="post"
+            targetId={post.id}
+            targetName={post.user?.name}
+          />
+        </div>
+      </div>
+      
+      {/* Post Image/Video (Full Width) */}
+      {post.mediaUrl && (
+        <div 
+          className="relative w-full bg-black min-h-[350px] max-h-[80vh] flex items-center justify-center overflow-hidden cursor-pointer select-none border-y border-slate-50 dark:border-zinc-900"
+          onDoubleClick={handleDoubleClickImage}
+        >
+          {post.mediaUrl && (post.mediaUrl.includes('youtube.com') || post.mediaUrl.includes('youtu.be') || post.mediaUrl.includes('facebook.com') || post.mediaUrl.includes('fb.watch')) ? (
+            <AdMediaDisplay ad={{ type: 'video', mediaUrl: post.mediaUrl }} className="w-full h-full aspect-video min-h-[350px] max-h-[80vh] object-cover bg-black pointer-events-auto" />
+          ) : post.mediaUrl && (post.type === 'video' || post.mediaUrl.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i)) ? (
+            <video preload="auto" src={post.mediaUrl} poster={post.thumbnailUrl} controls playsInline muted loop className="w-full h-full max-h-[80vh] object-contain bg-black transform-gpu will-change-transform" ref={(el) => { if (el && el.paused) { const p = el.play(); if (p !== undefined) p.catch(()=>{}); } }} />
+          ) : post.type === 'pdf' || (post.mediaUrl && post.mediaUrl.match(/\.pdf(\?.*)?$/i)) ? (
+            <div 
+              onClick={(e) => {
+                e.stopPropagation();
+                window.open(post.mediaUrl, '_blank');
+              }}
+              className="w-full h-full bg-gradient-to-br from-emerald-50 to-teal-100 dark:from-emerald-950/40 dark:to-teal-950/40 flex flex-col items-center justify-center p-8 cursor-pointer group hover:opacity-95 transition-all"
+            >
+              <div className="w-24 h-24 rounded-2xl bg-white dark:bg-zinc-900 shadow-xl flex items-center justify-center mb-4 border border-emerald-200 dark:border-emerald-800 group-hover:scale-105 transition-transform">
+                <FileText className="w-12 h-12 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <h3 className="text-lg font-black text-black dark:text-zinc-50 text-center mb-2 line-clamp-2">{post.title || 'Catalogue / Design PDF'}</h3>
+              <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 bg-white dark:bg-zinc-900 px-5 py-2.5 rounded-xl shadow-md border border-emerald-100 dark:border-emerald-800">
+                <ExternalLink className="w-4 h-4" /> View / Download PDF Document
+              </span>
+            </div>
+          ) : post.type === 'audio' || (post.mediaUrl && post.mediaUrl.match(/\.(mp3|wav|ogg|m4a)(\?.*)?$/i)) ? (
+            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-indigo-900 to-purple-900 p-8">
+               <div className="w-32 h-32 bg-white/10 rounded-full flex items-center justify-center mb-6 shadow-2xl animate-pulse">
+                 <Volume2 className="w-16 h-16 text-indigo-300" />
+               </div>
+               {post.mediaUrl && <audio src={post.mediaUrl} controls className="w-full max-w-[300px]" />}
+               <p className="mt-4 text-xs font-bold text-indigo-200 text-center uppercase tracking-widest">{post.title || 'Audio Post'}</p>
+            </div>
+          ) : (
+            <img 
+              src={post.mediaUrl} 
+              alt="Post media" 
+              className="w-full h-full max-h-[80vh] object-contain bg-black" 
+              onError={(e) => {
+                e.currentTarget.src = 'https://images.unsplash.com/photo-1615971677499-5467cbab01c0?auto=format&fit=crop&w=800&q=80';
+              }}
+            />
+          )}
+          {showHeartOverlay && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+              <Heart className="w-24 h-24 text-white fill-white drop-shadow-2xl animate-[ping_0.8s_cubic-bezier(0,0,0.2,1)_1]" style={{ animationIterationCount: 1, animationDuration: '800ms' }} />
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Post Actions */}
+      <div className="p-3">
+        <div className="flex justify-between items-center mb-3">
+          <div className="flex gap-4">
+            <button onClick={handleLike} className="hover:text-black/70 dark:hover:text-zinc-400 dark:text-zinc-400 transition-colors duration-700">
+              <Heart className={cn("w-6 h-6 transition-all duration-700 active:scale-95", isLiked ? "text-red-500 fill-red-500" : "")} />
+            </button>
+            <button onClick={() => setShowComments(!showComments)} className="hover:text-black/70 dark:hover:text-zinc-400 dark:text-zinc-400 active:scale-95 transition-all duration-700"><MessageCircle className="w-6 h-6" /></button>
+            <button onClick={() => setIsShareModalOpen(true)} className="hover:text-black/70 dark:hover:text-zinc-400 dark:text-zinc-400 active:scale-95 transition-all duration-700">
+              <svg aria-label="Share Post" className="w-6 h-6" fill="currentColor" height="24" role="img" viewBox="0 0 24 24" width="24"><line fill="none" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" x1="22" x2="9.218" y1="3" y2="10.083"></line><polygon fill="none" points="11.698 20.334 22 3.001 2 3.001 9.218 10.084 11.698 20.334" stroke="currentColor" strokeLinejoin="round" strokeWidth="2"></polygon></svg>
+            </button>
+            <button 
+              onClick={(e) => { 
+                e.stopPropagation(); 
+                
+                // Distance Check for Local Customer Members
+                if (currentUser?.role === 'customer' && currentUser?.membershipType === 'local') {
+                  const targetCoords = post?.user?.gpsCoords || post?.gpsCoords;
+                  if (userLocation && targetCoords) {
+                    const dist = calculateDistance(userLocation.lat, userLocation.lng, targetCoords.lat, targetCoords.lng);
+                    if (dist > 100) {
+                      toast.error(`📍 Distance Restriction: As a Local Member, you can only inquire with dealers within 100km. This business is ${Math.round(dist)}km away. Upgrade to 'Direct Company' plan for nationwide access!`);
+                      return;
+                    }
+                  } else if (!userLocation) {
+                    toast.error("📍 Please enable GPS/Location to verify distance for Local Membership.");
+                    return;
+                  }
+                }
+
+                navigate('/chat'); 
+              }} 
+              className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 active:scale-95 transition-all duration-700 flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-0.5 rounded-full border border-emerald-100 dark:border-emerald-800/50"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span className="text-[10px] font-black uppercase">Inquiry</span>
+            </button>
+            {currentUser?.role === 'customer' && (post?.user?.role === 'dealer' || post?.user?.role === 'factory') && (
+              <button
+                 onClick={(e) => {
+                   e.stopPropagation();
+                   if (!currentUser?.isVerified) {
+                     toast.error('Only Verified (Paid) Customers can send direct requirements. Please upgrade your account to Premium.');
+                     return;
+                   }
+                   setIsReqModalOpen(true);
+                 }}
+                 className="text-amber-600 dark:text-amber-400 hover:text-amber-700 active:scale-95 transition-all duration-700 flex items-center gap-1 bg-amber-50 dark:bg-amber-950/30 px-2.5 py-0.5 rounded-full border border-amber-100 dark:border-amber-800/50"
+                 title="Send Requirements to Company"
+              >
+                <ClipboardList className="w-4 h-4" />
+                <span className="text-[10px] font-black uppercase">Send Req</span>
+              </button>
+            )}
+          </div>
+          <button 
+            onClick={() => setShowStatsModal(true)} 
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 transition-all text-xs font-bold cursor-pointer border border-blue-500/20 active:scale-95 shadow-xs"
+            title="View detailed post insights & activity log"
+          >
+            <BarChart2 className="w-4 h-4 text-blue-500" />
+            <span>Insights</span>
+          </button>
+          <button onClick={handleSave} className="hover:text-black/70 dark:hover:text-zinc-400 dark:text-zinc-400 transition-colors duration-700">
+            <Bookmark className={cn("w-6 h-6 transition-all duration-700 active:scale-95", isSaved ? "text-black dark:text-zinc-50 fill-slate-900 dark:fill-white" : "")} />
+          </button>
+        </div>
+        
+        <div 
+          onClick={() => setShowStatsModal(true)}
+          className="font-bold text-xs sm:text-sm text-black dark:text-zinc-50 flex items-center gap-2 sm:gap-3 mb-1.5 cursor-pointer hover:opacity-80 transition-opacity"
+          title="Click to view engagement breakdown"
+        >
+          <span>{likesCount.toLocaleString()} likes</span>
+          <span className="w-1 h-1 rounded-full bg-slate-300 dark:bg-zinc-700"></span>
+          <span className="text-black/70 dark:text-zinc-400 font-medium">{viewsCount.toLocaleString()} views</span>
+        </div>
+        
+        {/* Caption */}
+        <div className="text-sm text-black dark:text-zinc-50 whitespace-pre-wrap leading-snug">
+          <span className="font-bold mr-2 cursor-pointer hover:underline decoration-blue-500 underline-offset-2">{post.user?.name}</span>
+          {post.content}
+        </div>
+
+        {/* 100% Public Star Rating & Feedback (No Login Needed) */}
+        <StarRatingFeedback 
+          postId={post.id} 
+          currentRating={post.averageRating} 
+          ratingsCount={post.ratingsCount} 
+        />
+
+        {post.commentsCount > 0 && !showComments && (
+          <button 
+            onClick={() => setShowComments(true)}
+            className="text-black/70 dark:text-zinc-400 text-sm mt-1.5 hover:text-black dark:hover:text-zinc-300 transition-colors"
+          >
+            View all {post.commentsCount} comments
+          </button>
+        )}
+        
+      </div>
+      
+      {/* Comments Section */}
+      {showComments && (
+        <div className="px-3 pb-3">
+          <div className="border-t border-slate-200 dark:border-zinc-800 pt-3 mt-3 max-h-60 overflow-y-auto space-y-3">
+            {comments.map(comment => (
+              <div key={comment.id} className="text-sm flex flex-col mb-1">
+                <div className="flex items-start gap-2 group/comment">
+                  <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center overflow-hidden shrink-0 mt-0.5">
+                    {comment.user?.avatarUrl ? (
+                      <img src={comment.user.avatarUrl} alt={comment.user.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-[10px] font-bold text-black/70">{comment.user?.name?.charAt(0) || 'U'}</span>
+                    )}
+                  </div>
+                  <div className="flex-1 flex flex-col">
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="font-semibold cursor-pointer text-xs">{comment.user?.name}</span>
+                      {(comment.user?.isVerified || (currentUser?.id === comment.userId && currentUser?.isVerified)) && (
+                        <VerifiedBadge size="sm" />
+                      )}
+                    </div>
+                    {editingCommentId === comment.id ? (
+                      <div className="flex-1 flex items-center gap-2 mt-1">
+                        <input 
+                          type="text" 
+                          value={editCommentText}
+                          onChange={(e) => setEditCommentText(e.target.value)}
+                          className="flex-1 border-b border-slate-300 dark:border-zinc-700 bg-transparent focus:outline-none text-sm"
+                          autoFocus
+                        />
+                        <button onClick={() => handleUpdateComment(comment.id)} className="text-blue-500 font-semibold text-xs">Save</button>
+                        <button onClick={() => setEditingCommentId(null)} className="text-black/70 text-xs">Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col">
+                        <span className="flex-1 text-sm">{comment.content}</span>
+                        {comment.imageUrl && (
+                          <div className="mt-2 rounded-xl overflow-hidden border border-slate-100 dark:border-zinc-800 max-w-[220px] shadow-sm">
+                            <img 
+                              src={comment.imageUrl} 
+                              alt="Comment attachment" 
+                              className="w-full h-auto cursor-pointer hover:opacity-90 transition-opacity"
+                              onClick={() => window.open(comment.imageUrl, '_blank')}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-3 mt-1">
+                      <button 
+                        onClick={() => setNewComment('@' + (comment.user?.name?.replace(/\s+/g, '') || 'User') + ' ')} 
+                        className="text-[10px] font-bold text-black/70 hover:text-black dark:hover:text-zinc-300 cursor-pointer"
+                      >
+                        Reply
+                      </button>
+                    </div>
+                  </div>
+                  {comment.userId === currentUser.id && editingCommentId !== comment.id && (
+                    <div className="opacity-0 group-hover/comment:opacity-100 transition-opacity flex items-center gap-2 text-xs text-black/60 shrink-0 mt-0.5">
+                      <button onClick={() => startEditComment(comment)} className="hover:text-blue-500">Edit</button>
+                      <button onClick={() => handleDeleteComment(comment.id)} className="hover:text-red-500">Delete</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {comments.length === 0 && <div className="text-sm text-black/70 font-medium text-center py-4">No comments yet. Be the first to comment!</div>}
+          </div>
+
+          <div className="mt-4">
+            {commentImagePreview && (
+              <div className="relative w-20 h-20 mb-3 rounded-xl overflow-hidden border-2 border-blue-500 shadow-lg group">
+                <img src={commentImagePreview} alt="Preview" className="w-full h-full object-cover" />
+                <button 
+                  onClick={() => { setCommentImage(null); setCommentImagePreview(null); }}
+                  className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 hover:bg-black transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+            
+            <form onSubmit={handleAddComment} className="flex items-center pt-4 border-t border-slate-100 dark:border-zinc-900 gap-3 relative">
+              <input
+                type="file"
+                ref={commentFileInputRef}
+                className="hidden"
+                accept="image/*"
+                onChange={handleCommentImageChange}
+              />
+              <button 
+                type="button"
+                onClick={() => commentFileInputRef.current?.click()}
+                className="p-2 text-black/60 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-full transition-all"
+                title="Add image to comment"
+              >
+                <Camera className="w-5 h-5" />
+              </button>
+              
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  placeholder="Add a comment..."
+                  className="w-full text-sm bg-slate-50 dark:bg-zinc-950/50 border border-slate-100 dark:border-zinc-800 rounded-full px-4 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500/50 placeholder-slate-400"
+                  value={newComment}
+                  onChange={(e) => setNewComment(e.target.value)}
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                disabled={(!newComment.trim() && !commentImage) || isSubmittingComment}
+                className="text-blue-600 dark:text-blue-400 font-bold text-sm px-3 disabled:opacity-30 transition-all hover:scale-105 active:scale-95"
+              >
+                {isSubmittingComment ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Post'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+      <ShareModal isOpen={isShareModalOpen} onClose={() => setIsShareModalOpen(false)} data={post} type="post" />
+      <EditPostModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} post={post} onSave={(p) => { if (onPostUpdated) onPostUpdated(p); }} />
+      {showStatsModal && (
+        <SinglePostStatsModal postId={post.id} onClose={() => setShowStatsModal(false)} />
+      )}
+
+      {/* Customer Requirements Modal */}
+      {isReqModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 w-full max-w-md rounded-3xl overflow-hidden shadow-2xl flex flex-col animate-in zoom-in-95 duration-200">
+            <div className="p-4 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between">
+              <h3 className="font-bold text-black dark:text-zinc-50 flex items-center gap-2">
+                <ClipboardList className="w-5 h-5 text-amber-500" /> Send Requirements
+              </h3>
+              <button onClick={() => setIsReqModalOpen(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
+                <X className="w-5 h-5 text-black/70" />
+              </button>
+            </div>
+            <form onSubmit={handleSendRequirement} className="p-4 flex flex-col gap-3">
+              <div>
+                <label className="block text-xs font-bold text-black dark:text-zinc-300 mb-1">Tiles Requirement (Sqft/Boxes)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 500 boxes vitrified tiles"
+                  className="w-full bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500"
+                  value={reqTilesQty}
+                  onChange={(e) => setReqTilesQty(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-black dark:text-zinc-300 mb-1">EWC / Toilets Quantity</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 5 One-Piece EWCs"
+                  className="w-full bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500"
+                  value={reqEwcQty}
+                  onChange={(e) => setReqEwcQty(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-black dark:text-zinc-300 mb-1">Faucets / Mixers / Showers</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 10 Wall Mixers, 5 Showers"
+                  className="w-full bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500"
+                  value={reqMixerQty}
+                  onChange={(e) => setReqMixerQty(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-black dark:text-zinc-300 mb-1">Other Accessories / Message</label>
+                <textarea
+                  placeholder="Any other specific requirements?"
+                  className="w-full bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500 min-h-[60px]"
+                  value={reqOther}
+                  onChange={(e) => setReqOther(e.target.value)}
+                ></textarea>
+              </div>
+              <button
+                type="submit"
+                disabled={isSubmittingReq || (!reqTilesQty && !reqEwcQty && !reqMixerQty && !reqOther)}
+                className="mt-2 w-full bg-amber-500 hover:bg-amber-600 text-black font-bold py-2.5 rounded-xl text-sm transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isSubmittingReq ? 'Sending...' : 'Send Requirements to Company'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}</div>
+  );
+}
+
